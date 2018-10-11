@@ -51,6 +51,7 @@ class ScaleNRotate(object):
             else:
                 flagval = cv2.INTER_CUBIC
             tmp = cv2.warpAffine(tmp, M, (w, h), flags=flagval)
+            tmp = np.clip(tmp, 0, 255)
 
             sample[elem] = tmp
 
