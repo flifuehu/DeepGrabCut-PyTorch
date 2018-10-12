@@ -117,6 +117,8 @@ def fixed_resize(sample, resolution, flagval=None):
         for ii in range(sample.shape[2]):
             sample[:, :, ii] = cv2.resize(tmp[:, :, ii], resolution[::-1], interpolation=flagval)
 
+    sample = np.clip(sample, 0, 255)
+
     return sample
 
 

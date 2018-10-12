@@ -20,19 +20,30 @@ from tensorboardX import SummaryWriter
 
 # Custom includes
 from dataloaders.combine_dbs import CombineDBs as combine_dbs
-from dataloaders import pascal, sbd
+from dataloaders import pascal, sbd, lapvideos
 from networks import deeplab_resnet as resnet
 from layers.loss import class_balanced_cross_entropy_loss
 from dataloaders import custom_transforms as tr
 from dataloaders.utils import generate_param_report
+from tqdm import tqdm as tqdm
+
+import matplotlib.pyplot as plt
      
+db_name = 'pascal'  # 'lapvideos'
+db_csvs = {'train': '/home/felix/Projects/tool-detection/pytorch-retinanet/data/bypass_margin20px/'
+                    'bypass_cleaned_reduced_margin20px/'
+                    'ds_bypass_tools_segs_to_bb_margin20px_retinanet_train_bbs.csv',
+           'val': '/home/felix/Projects/tool-detection/pytorch-retinanet/data/bypass_margin20px/'
+                  'bypass_cleaned_reduced_margin20px/'
+                  'ds_bypass_tools_segs_to_bb_margin20px_retinanet_test_bbs.csv'}
 
 gpu_id = 0
 print('Using GPU: {} '.format(gpu_id))
 # Setting parameters
 use_sbd = True
 nEpochs = 200  # Number of epochs for training
-resume_epoch = 30  # Default is 0, change if want to resume
+resume_epoch = 10  # Default is 0, change if want to resume
+num_workers = 0  # num of workers to load images
 
 p = OrderedDict()  # Parameters to include in report
 classifier = 'psp'  # Head classifier to use
@@ -62,7 +73,7 @@ if not os.path.exists(os.path.join(save_dir, 'models')):
     os.makedirs(os.path.join(save_dir, 'models'))
 
 # Network definition
-modelName = 'deepgc_pascal'
+modelName = 'deepgc_%s' % db_name
 net = resnet.resnet101(1, pretrained=True, nInputChannels=nInputChannels, classifier=classifier)
 
 if resume_epoch == 0:
@@ -103,17 +114,25 @@ if resume_epoch != nEpochs:
         tr.ConcatInputs(elems=('image', 'distance_map')),
         tr.ToTensor()])
 
-    voc_train = pascal.VOCSegmentation(split='train', transform=composed_transforms_tr)
-    voc_val = pascal.VOCSegmentation(split='val', transform=composed_transforms_ts)
+    if db_name is 'pascal' or db_name is 'sbd':
+        voc_train = pascal.VOCSegmentation(split='train', transform=composed_transforms_tr)
+        voc_val = pascal.VOCSegmentation(split='val', transform=composed_transforms_ts)
 
-    if use_sbd:
-        sbd_train = sbd.SBDSegmentation(split=['train', 'val'], transform=composed_transforms_tr, retname=True)
-        db_train = combine_dbs([voc_train, sbd_train], excluded=[voc_val])
-    else:
-        db_train = voc_train
+        if use_sbd:
+            sbd_train = sbd.SBDSegmentation(split=['train', 'val'], transform=composed_transforms_tr, retname=True)
+            db_train = combine_dbs([voc_train, sbd_train], excluded=[voc_val])
+        else:
+            db_train = voc_train
 
-    trainloader = DataLoader(db_train, batch_size=p['trainBatch'], shuffle=True, num_workers=2)
-    testloader = DataLoader(voc_val, batch_size=testBatch, shuffle=False, num_workers=2)
+        trainloader = DataLoader(db_train, batch_size=p['trainBatch'], shuffle=True, num_workers=num_workers)
+        testloader = DataLoader(voc_val, batch_size=testBatch, shuffle=False, num_workers=num_workers)
+
+    elif db_name is 'lapvideos':
+        lap_train = lapvideos.LAPSegmentation(db_csv=db_csvs['train'], transform=composed_transforms_tr)
+        lap_val = lapvideos.LAPSegmentation(db_csv=db_csvs['val'], transform=composed_transforms_ts)
+
+        trainloader = DataLoader(lap_train, batch_size=p['trainBatch'], shuffle=True, num_workers=num_workers)
+        testloader = DataLoader(lap_val, batch_size=testBatch, shuffle=False, num_workers=num_workers)
 
     generate_param_report(os.path.join(save_dir, exp_name + '.txt'), p)
 
@@ -129,9 +148,17 @@ if resume_epoch != nEpochs:
         start_time = timeit.default_timer()
 
         net.train()
-        for ii, sample_batched in enumerate(trainloader):
+        for ii, sample_batched in enumerate(tqdm(trainloader, total=len(trainloader))):
 
             inputs, gts = sample_batched['concat'], sample_batched['gt']
+
+            for ib in range(inputs.shape[0]):
+                fig, axes = plt.subplots(1, 3)
+                axes[0].imshow(inputs[ib, 0:3, :, :].detach().cpu().numpy().transpose((1, 2, 0)) / 255.0)
+                axes[1].imshow(gts[ib, 0, :, :].detach().cpu().numpy())
+                axes[2].imshow(inputs[ib, 3, :, :].detach().cpu().numpy() / 255.0)
+            plt.show()
+
 
             # Forward-Backward of the mini-batch
             inputs, gts = Variable(inputs, requires_grad=True), Variable(gts)
